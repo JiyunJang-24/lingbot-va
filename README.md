@@ -27,6 +27,7 @@ https://github.com/user-attachments/assets/cec7b7a6-953b-4fa4-8f1a-47efc1fce547
 - **Long-Horizon Performance and Generalization**: High improvements in sample efficiency, long-horizon success rates, and generalization to novel scenes.
 
 # 🚀 News
+- **[2026-04-08]** Post-training and inference code for the **LIBERO** dataset is now available!
 - **[2026-02-17]** Post-training code and dataset released! Support fine-tuning LingBot-VA on custom robotic manipulation datasets.
 - **[2026-01-29]** Weights and code for shared backbone released! Please stay tuned for our separated version!
 
@@ -181,6 +182,20 @@ It is important to note that the inference server and client must be deployed on
 
 > **GPU Memory Requirements**: Approximately **24GB VRAM** for single-GPU RoboTwin evaluation with offload mode enabled (VAE and text_encoder offloaded to CPU).
 
+
+### Evaluation on LIBERO
+For LIBERO, we recommend using the following training dataset:
+[LIBERO LONG](https://drive.google.com/file/d/1QGNkvsb1hlRmRkKCgFlyWitv17sRuagS/view?usp=sharing)
+
+
+```bash
+# server
+bash evaluation/libero/launch_server.sh
+
+# client
+bash evaluation/libero/launch_client.sh
+```
+
 ### Run Image to Video-Action Generation
 
 We also provide a script for image to video-action generation:
@@ -326,7 +341,11 @@ The latent file naming convention `episode_{index}_{start_frame}_{end_frame}.pth
 ### Training
 
 ```bash
-NGPU=8 bash script/run_va_posttrain.sh
+# RoboTwin
+NGPU=8 CONFIG_NAME='robotwin_train' bash script/run_va_posttrain.sh
+
+# LIBERO
+NGPU=8 CONFIG_NAME='libero_train' bash script/run_va_posttrain.sh
 ```
 
 For better training performance, use a larger global batch size (e.g., 32, 64). If you have limited GPU resources, you can increase `gradient_accumulation_steps` to achieve a larger effective batch size.
