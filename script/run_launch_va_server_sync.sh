@@ -11,10 +11,7 @@ LOG_RANK=${LOG_RANK:-"0"}
 TORCHFT_LIGHTHOUSE=${TORCHFT_LIGHTHOUSE:-"http://localhost:29510"}
 CONFIG_NAME=${CONFIG_NAME:-"robotwin"}
 
-overrides=""
-if [ $# -ne 0 ]; then
-    overrides="$*"
-fi
+overrides=("$@")
 
 ## node setting
 num_gpu=${NGPU}
@@ -25,10 +22,10 @@ config_name=${CONFIG_NAME}
 
 ## cmd setting
 export TOKENIZERS_PARALLELISM=false
-PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True" TORCHFT_LIGHTHOUSE=${torchft_lighthouse} \
+PYTORCH_ALLOC_CONF="expandable_segments:True" TORCHFT_LIGHTHOUSE=${torchft_lighthouse} \
 python -m torch.distributed.run \
     --nproc_per_node=${num_gpu} \
     --local-ranks-filter=${log_rank} \
     --master_port ${master_port} \
     --tee 3 \
-    -m wan_va.wan_va_server --config-name ${config_name} $overrides
+    -m wan_va.wan_va_server --config-name "${config_name}" "${overrides[@]}"

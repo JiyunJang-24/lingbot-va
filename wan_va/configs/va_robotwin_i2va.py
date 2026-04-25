@@ -9,3 +9,4 @@ va_robotwin_i2va_cfg.input_img_path = 'example/robotwin'
 va_robotwin_i2va_cfg.num_chunks_to_infer = 10
 va_robotwin_i2va_cfg.prompt = 'Grab the medium-sized white mug, rotate it, place it on the table, and hook it onto the smooth dark gray rack.'
 va_robotwin_i2va_cfg.infer_mode = 'i2va'
+va_robotwin_i2va_cfg.enable_offload = True

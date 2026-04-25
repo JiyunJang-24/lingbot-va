@@ -680,6 +680,19 @@ def run(args):
     port = config.port if args.port is None else args.port
     if args.save_root is not None:
         config.save_root = args.save_root
+    if args.model_path is not None:
+        config.wan22_pretrained_model_name_or_path = args.model_path
+    if args.prompt is not None:
+        config.prompt = args.prompt
+    if args.input_img_path is not None:
+        config.input_img_path = args.input_img_path
+    model_path = config.wan22_pretrained_model_name_or_path
+    if not os.path.isdir(model_path):
+        raise FileNotFoundError(
+            f"Model path does not exist: {model_path}\n"
+            "Download robbyant/lingbot-va-posttrain-robotwin or set MODEL_PATH "
+            "to a local directory containing vae/, text_encoder/, tokenizer/, and transformer/."
+        )
     rank = int(os.getenv("RANK", 0))
     local_rank = int(os.environ.get('LOCAL_RANK', 0))
     world_size = int(os.environ.get("WORLD_SIZE", 1))
@@ -720,6 +733,24 @@ def main():
         type=str,
         default=None,
         help='save root'
+    )
+    parser.add_argument(
+        "--model_path",
+        type=str,
+        default=None,
+        help='local pretrained model root containing vae, text_encoder, tokenizer, and transformer',
+    )
+    parser.add_argument(
+        "--prompt",
+        type=str,
+        default=None,
+        help="Override prompt text for i2va generation",
+    )
+    parser.add_argument(
+        "--input_img_path",
+        type=str,
+        default=None,
+        help="Override input image directory for i2va mode",
     )
     args = parser.parse_args()
     run(args)

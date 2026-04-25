@@ -6,10 +6,15 @@ import time
 from libero.libero.envs import OffScreenRenderEnv
 from pathlib import Path
 from tqdm import tqdm
-from lerobot.datasets.utils import write_json
 import os
 import imageio
 import cv2
+import json
+
+
+def write_json(data, path):
+    with open(path, "w") as f:
+        json.dump(data, f, indent=2)
 
 
 def save_video(real_obs_list, save_path, fps=15, video_names=["observation.images.agentview_rgb", "observation.images.eye_in_hand_rgb"]):
@@ -74,7 +79,7 @@ def env_one_step(env_in, action):
     return _extract_obs(obs), done
 
 
-def run_one(model, libero_benchmark, task_idx, out_dir, episode_idx):
+def run_one(model, libero_benchmark, task_idx, out_dir, episode_idx, max_timesteps):
     benchmark_dict = benchmark.get_benchmark_dict()
     benchmark_instance = benchmark_dict[libero_benchmark]()
     num_tasks = benchmark_instance.get_num_tasks()
@@ -95,7 +100,7 @@ def run_one(model, libero_benchmark, task_idx, out_dir, episode_idx):
     full_obs_list = []
     done = False
     first = True
-    while cur_env.env.timestep < 800:
+    while cur_env.env.timestep < max_timesteps:
         ret = model.infer(dict(obs=first_obs, prompt=prompt))
         action = ret['action']
 
@@ -107,18 +112,22 @@ def run_one(model, libero_benchmark, task_idx, out_dir, episode_idx):
             for j in range(action.shape[2]):
                 ee_action = action[:, i, j]
                 observes, done = env_one_step(cur_env, ee_action)
+                full_obs_list.append(observes)
                 if done:
                     break
                 if (j+1) % action_per_frame == 0:
-                    full_obs_list.append(observes)
                     key_frame_list.append(observes)
+                if cur_env.env.timestep >= max_timesteps:
+                    break
 
             if done:
+                break
+            if cur_env.env.timestep >= max_timesteps:
                 break
 
         first = False
 
-        if done:
+        if done or cur_env.env.timestep >= max_timesteps:
             break
         else:
             model.infer(dict(obs=key_frame_list, compute_kv_cache=True, imagine=False, state=action))
@@ -137,7 +146,7 @@ def run_one(model, libero_benchmark, task_idx, out_dir, episode_idx):
     return done
 
 
-def run(libero_benchmark, port, out_dir, test_num, task_range=None):
+def run(libero_benchmark, port, out_dir, test_num, task_range=None, max_timesteps=800):
     '''
         task_range: [start, end) for splitting tasks
     '''
@@ -167,7 +176,7 @@ def run(libero_benchmark, port, out_dir, test_num, task_range=None):
             succ_num = 0.
 
         for episode_idx in tqdm(episode_list, total=len(episode_list)):
-            res_i = run_one(model, libero_benchmark, task_idx, out_dir, episode_idx)
+            res_i = run_one(model, libero_benchmark, task_idx, out_dir, episode_idx, max_timesteps)
             succ_num += res_i
             succ_rate = succ_num / (episode_idx + 1)
             print(f"Success rate: {succ_rate}, success num: {succ_num}, total num: {episode_idx + 1}")
@@ -214,6 +223,12 @@ def main():
         type=str,
         default="outputs/libero",
         help="Output directory for results",
+    )
+    parser.add_argument(
+        "--max-timesteps",
+        type=int,
+        default=800,
+        help="Maximum environment timesteps per episode",
     )
     args = parser.parse_args()
     run(**vars(args))
