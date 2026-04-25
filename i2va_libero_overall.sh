@@ -2,8 +2,8 @@ pkill -f 'evaluation/libero/client.py' || true
 pkill -f 'wan_va.wan_va_server --config-name libero' || true
 
 
-save_folder_name="libero_spatial_base_time_200"
-libero_benchmark="libero_spatial"
+save_folder_name="libero_10_base_time_200"
+libero_benchmark="libero_10"
 model_path="/data1/local/lingbot-va/checkpoints/lingbot-va-base"
 mkdir -p outputs/$save_folder_name
 
