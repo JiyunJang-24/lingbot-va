@@ -84,6 +84,7 @@ class VA_Server:
             torch_device=self.device,
             attn_mode="torch"
         )
+        self.transformer.to(dtype=self.dtype)
         shard_fn = shard_model
         self.transformer = _configure_model(model=self.transformer,
                                             shard_fn=shard_fn,
