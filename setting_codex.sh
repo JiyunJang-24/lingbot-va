@@ -64,11 +64,19 @@ uv pip install \
   -e third_party/LIBERO \
   "robosuite==1.4.0" \
   "bddl==1.0.1" \
-  "robomimic==0.2.0" \
   "gym==0.25.2" \
   "hydra-core==1.2.0" \
   "thop==0.1.1.post2209072238" \
-  "future==0.18.2"
+  "future==0.18.2" \
+  h5py \
+  psutil \
+  termcolor \
+  tensorboard \
+  tensorboardX
+
+# robomimic depends on egl-probe, whose CMake build can fail on this host.
+# We run LIBERO with MUJOCO_GL=osmesa, so egl-probe is not needed.
+uv pip install --no-deps "robomimic==0.2.0"
 
 # Avoid LIBERO's first-import interactive prompt.
 mkdir -p "${LIBERO_CONFIG_PATH:-$HOME/.libero}"
