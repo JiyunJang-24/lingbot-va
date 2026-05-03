@@ -47,6 +47,30 @@ from dataset import MultiLatentLeRobotDataset
 import gc
 
 
+def collate_latent_lerobot_batch(batch):
+    """Collate variable-length latent/action sequences by trimming to a shared length."""
+    if len(batch) == 1:
+        return {
+            key: value.unsqueeze(0) if torch.is_tensor(value) else [value]
+            for key, value in batch[0].items()
+        }
+
+    min_frames = min(item["latents"].shape[1] for item in batch)
+    print("Collating batch with min_frames =", min_frames)
+    out = {}
+    for key in batch[0]:
+        values = [item[key] for item in batch]
+        if key == "latents":
+            out[key] = torch.stack([value[:, :min_frames] for value in values], dim=0)
+        elif key in {"actions", "actions_mask"}:
+            out[key] = torch.stack([value[:, :min_frames] for value in values], dim=0)
+        elif torch.is_tensor(values[0]):
+            out[key] = torch.stack(values, dim=0)
+        else:
+            out[key] = values
+    return out
+
+
 class Trainer:
     def __init__(self, config):
         if config.enable_wandb and config.rank == 0:
@@ -135,6 +159,7 @@ class Trainer:
             shuffle=(train_sampler is None), 
             num_workers=config.load_worker,
             sampler=train_sampler,
+            collate_fn=collate_latent_lerobot_batch,
         )
 
         self.train_scheduler_latent = FlowMatchScheduler(shift=self.config.snr_shift, sigma_min=0.0, extra_one_step=True)
