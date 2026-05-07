@@ -36,7 +36,7 @@ va_libero_train_cfg.update(va_libero_cfg)
 
 va_libero_train_cfg.dataset_path = os.environ.get(
     "DATASET_DIR",
-    "/path/to/your/dataset",
+    "/root/Desktop/workspace/lingbot-va/datasets/libero-long-lerobot",
 )
 va_libero_train_cfg.empty_emb_path = os.path.join(va_libero_train_cfg.dataset_path, 'empty_emb.pt')
 va_libero_train_cfg.wan22_pretrained_model_name_or_path = os.environ.get(

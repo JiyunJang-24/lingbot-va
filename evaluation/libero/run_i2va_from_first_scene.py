@@ -38,7 +38,7 @@ def init_single_env(env_in, init_state):
     return extract_obs(obs)
 
 
-def capture_first_scene(libero_benchmark, task_idx, test_num):
+def capture_first_scene(libero_benchmark, task_idx, test_num, task_description=None):
     from libero.libero import benchmark
     from libero.libero.envs import OffScreenRenderEnv
 
@@ -48,7 +48,8 @@ def capture_first_scene(libero_benchmark, task_idx, test_num):
     if task_idx >= num_tasks:
         raise ValueError(f"task_idx={task_idx} is out of range for {libero_benchmark} (num_tasks={num_tasks})")
 
-    prompt = benchmark_instance.get_task(task_idx).language
+    original_prompt = benchmark_instance.get_task(task_idx).language
+    prompt = task_description if task_description else original_prompt
     env_args = {
         "bddl_file_name": benchmark_instance.get_task_bddl_file_path(task_idx),
         "camera_heights": 128,
@@ -101,10 +102,16 @@ def main():
     parser.add_argument("--example-dir", type=Path, default=Path(__file__).resolve().parents[2] / "example/libero")
     parser.add_argument("--model-path", type=Path, default=Path(__file__).resolve().parents[2] / "checkpoints/lingbot-va-base")
     parser.add_argument("--output-root", type=Path, default=Path(__file__).resolve().parents[2] / "outputs/libero_i2va")
+    parser.add_argument("--task-description", type=str, default=None, help="Override the LIBERO task language prompt sent to i2va")
     args = parser.parse_args()
 
     repo_root = args.repo_root.resolve()
-    first_obs, prompt, episode_idx = capture_first_scene(args.benchmark, args.task_idx, args.test_num)
+    first_obs, prompt, episode_idx = capture_first_scene(
+        args.benchmark,
+        args.task_idx,
+        args.test_num,
+        task_description=args.task_description,
+    )
     saved_images = save_first_scene(first_obs, args.example_dir.resolve())
 
     run_name = f"{args.benchmark}_task{args.task_idx}_test{args.test_num}_ep{episode_idx}_{time.strftime('%Y%m%d_%H%M%S')}"

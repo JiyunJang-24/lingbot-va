@@ -7,6 +7,7 @@ import wandb
 
 import torch
 import torch.distributed as dist
+import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, DistributedSampler
 from tqdm import tqdm
@@ -47,6 +48,36 @@ from dataset import MultiLatentLeRobotDataset
 import gc
 
 
+class LoRALinear(nn.Module):
+    def __init__(
+        self,
+        base_layer,
+        rank=8,
+        alpha=16,
+        dropout=0.0,
+    ):
+        super().__init__()
+        if not isinstance(base_layer, nn.Linear):
+            raise TypeError(f"LoRALinear expects nn.Linear, got {type(base_layer)}")
+
+        self.base_layer = base_layer
+        self.rank = int(rank)
+        self.alpha = float(alpha)
+        self.scaling = self.alpha / self.rank
+        self.register_buffer("lora_alpha", torch.tensor(self.alpha, dtype=torch.float32), persistent=True)
+        self.dropout = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
+        self.lora_down = nn.Linear(base_layer.in_features, self.rank, bias=False)
+        self.lora_up = nn.Linear(self.rank, base_layer.out_features, bias=False)
+
+        nn.init.kaiming_uniform_(self.lora_down.weight, a=5**0.5)
+        nn.init.zeros_(self.lora_up.weight)
+
+    def forward(self, x):
+        base_out = self.base_layer(x)
+        lora_out = self.lora_up(self.lora_down(self.dropout(x))) * self.scaling
+        return base_out + lora_out.to(dtype=base_out.dtype)
+
+
 def collate_latent_lerobot_batch(batch):
     """Collate variable-length latent/action sequences by trimming to a shared length."""
     if len(batch) == 1:
@@ -69,6 +100,160 @@ def collate_latent_lerobot_batch(batch):
         else:
             out[key] = values
     return out
+
+
+def _set_finetune_only_action(model):
+    """Freeze video/shared weights and keep only action-specific modules trainable."""
+    trainable_prefixes = (
+        "action_embedder.",
+        "condition_embedder_action.",
+        "action_proj_out.",
+    )
+    trainable_names = []
+    frozen_names = []
+
+    for name, param in model.named_parameters():
+        should_train = name.startswith(trainable_prefixes)
+        param.requires_grad_(should_train)
+        if should_train:
+            trainable_names.append(name)
+        else:
+            frozen_names.append(name)
+
+    return trainable_names, frozen_names
+
+
+def _set_finetune_action_lora(model):
+    """Freeze original weights and train action modules plus transformer LoRA adapters."""
+    action_prefixes = (
+        "action_embedder.",
+        "condition_embedder_action.",
+        "action_proj_out.",
+    )
+    trainable_names = []
+    frozen_names = []
+
+    for name, param in model.named_parameters():
+        should_train = name.startswith(action_prefixes) or ".lora_" in name
+        param.requires_grad_(should_train)
+        if should_train:
+            trainable_names.append(name)
+        else:
+            frozen_names.append(name)
+
+    return trainable_names, frozen_names
+
+
+def _get_submodule(root, path):
+    module = root
+    if path:
+        for part in path.split("."):
+            module = module[int(part)] if part.isdigit() else getattr(module, part)
+    return module
+
+
+def _set_submodule(root, path, new_module):
+    parent_path, _, child_name = path.rpartition(".")
+    parent = _get_submodule(root, parent_path)
+    if child_name.isdigit():
+        parent[int(child_name)] = new_module
+    else:
+        setattr(parent, child_name, new_module)
+
+
+def _add_lora_to_transformer_blocks(model, rank=8, alpha=16, dropout=0.0):
+    """Attach LoRA to every Linear layer inside transformer blocks."""
+    replaced = []
+    for module_name, module in list(model.named_modules()):
+        if not module_name.startswith("blocks."):
+            continue
+        if isinstance(module, nn.Linear):
+            _set_submodule(
+                model,
+                module_name,
+                LoRALinear(module, rank=rank, alpha=alpha, dropout=dropout),
+            )
+            replaced.append(module_name)
+    return replaced
+
+
+def _write_trainable_parameter_report(
+    report_path,
+    trainable_names,
+    frozen_names,
+    lora_module_names=None,
+):
+    report_path = Path(report_path)
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    lora_module_names = lora_module_names or []
+
+    with open(report_path, "w") as f:
+        f.write("Trainable parameter report\n")
+        f.write("==========================\n\n")
+        f.write(f"LoRA modules inserted: {len(lora_module_names)}\n")
+        for name in lora_module_names:
+            f.write(f"  LORA_MODULE {name}\n")
+
+        f.write(f"\nTrainable parameter tensors: {len(trainable_names)}\n")
+        for name in trainable_names:
+            f.write(f"  TRAINABLE {name}\n")
+
+        f.write(f"\nFrozen parameter tensors: {len(frozen_names)}\n")
+        for name in frozen_names:
+            f.write(f"  FROZEN {name}\n")
+
+
+def _merge_lora_state_dict_for_save(state_dict):
+    """Convert LoRA-wrapped Linear state into normal Linear keys for checkpoint compatibility."""
+    merged = {}
+    lora_prefixes = sorted(
+        {
+            key[: -len(".base_layer.weight")]
+            for key in state_dict
+            if key.endswith(".base_layer.weight")
+        },
+        key=len,
+        reverse=True,
+    )
+
+    for key, value in state_dict.items():
+        matched_prefix = next((prefix for prefix in lora_prefixes if key.startswith(prefix + ".")), None)
+        if matched_prefix is None:
+            merged[key] = value
+            continue
+
+        suffix = key[len(matched_prefix) + 1 :]
+        if suffix == "base_layer.weight":
+            down = state_dict[f"{matched_prefix}.lora_down.weight"].float()
+            up = state_dict[f"{matched_prefix}.lora_up.weight"].float()
+            rank = down.shape[0]
+            alpha_key = f"{matched_prefix}.lora_alpha"
+            alpha = float(state_dict[alpha_key].item()) if alpha_key in state_dict else float(rank)
+            delta = (up @ down) * (alpha / rank)
+            merged[f"{matched_prefix}.weight"] = (value.float() + delta).to(value.dtype)
+        elif suffix == "base_layer.bias":
+            merged[f"{matched_prefix}.bias"] = value
+        elif suffix.startswith("lora_") or suffix in {"rank", "scaling"}:
+            continue
+        else:
+            merged[key] = value
+
+    return merged
+
+
+def _count_parameters(parameters):
+    return sum(p.numel() for p in parameters)
+
+
+def _str2bool(value):
+    if isinstance(value, bool):
+        return value
+    value = value.lower()
+    if value in {"1", "true", "t", "yes", "y", "on"}:
+        return True
+    if value in {"0", "false", "f", "no", "n", "off"}:
+        return False
+    raise argparse.ArgumentTypeError(f"Expected a boolean value, got {value!r}")
 
 
 class Trainer:
@@ -110,6 +295,22 @@ class Trainer:
             torch_dtype=torch.float32,
             torch_device='cpu',
         )
+        self.transformer.requires_grad_(True)
+        self.lora_module_names = []
+        if getattr(config, "lora", False):
+            if not getattr(config, "finetune_only_action", False):
+                raise ValueError("--lora is currently supported only with --finetune_only_action.")
+            self.lora_module_names = _add_lora_to_transformer_blocks(
+                self.transformer,
+                rank=getattr(config, "lora_rank", 8),
+                alpha=getattr(config, "lora_alpha", 16),
+                dropout=getattr(config, "lora_dropout", 0.0),
+            )
+            if config.rank == 0:
+                logger.info(
+                    "Inserted LoRA into %d transformer Linear layers",
+                    len(self.lora_module_names),
+                )
 
         logger.info("Setting up activation checkpointing ...")
         apply_ac(self.transformer)
@@ -124,11 +325,48 @@ class Trainer:
             eval_mode=False,
         )
         self.transformer.train()
-        self.transformer.requires_grad_(True)
+        if getattr(config, "finetune_only_action", False):
+            if getattr(config, "lora", False):
+                trainable_names, frozen_names = _set_finetune_action_lora(self.transformer)
+                mode_name = "finetune_only_action+lora"
+            else:
+                trainable_names, frozen_names = _set_finetune_only_action(self.transformer)
+                mode_name = "finetune_only_action"
+            if config.rank == 0:
+                trainable_params = _count_parameters(
+                    p for p in self.transformer.parameters() if p.requires_grad
+                )
+                frozen_params = _count_parameters(
+                    p for p in self.transformer.parameters() if not p.requires_grad
+                )
+                logger.info(
+                    "%s=True: training %d params, freezing %d params",
+                    mode_name,
+                    trainable_params,
+                    frozen_params,
+                )
+                logger.info(
+                    "Trainable parameter groups: %s",
+                    sorted({name.split(".")[0] for name in trainable_names}),
+                )
+                logger.info("Frozen parameter tensors: %d", len(frozen_names))
+                report_path = Path(config.save_root) / "trainable_parameters.txt"
+                _write_trainable_parameter_report(
+                    report_path,
+                    trainable_names=trainable_names,
+                    frozen_names=frozen_names,
+                    lora_module_names=self.lora_module_names,
+                )
+                logger.info(f"Wrote trainable parameter report to {report_path}")
+        else:
+            self.transformer.requires_grad_(True)
 
         # Optimizer
+        trainable_params = [p for p in self.transformer.parameters() if p.requires_grad]
+        if not trainable_params:
+            raise RuntimeError("No trainable parameters found for optimizer.")
         self.optimizer = torch.optim.AdamW(
-            [p for p in self.transformer.parameters() if p.requires_grad],
+            trainable_params,
             lr=config.learning_rate,
             betas=(config.beta1, config.beta2),
             eps=1e-8,
@@ -335,7 +573,10 @@ class Trainer:
 
         output = self.transformer(input_dict, train_mode=True)
         latent_loss, action_loss = self.compute_loss(input_dict, output)
-        loss = latent_loss + action_loss
+        if getattr(self.config, "finetune_only_action", False):
+            loss = action_loss
+        else:
+            loss = latent_loss + action_loss
 
         loss.backward()
 
@@ -362,6 +603,8 @@ class Trainer:
                 self.transformer,
                 options=StateDictOptions(full_state_dict=True, cpu_offload=True),
             )
+            if getattr(self.config, "lora", False):
+                state_dict = _merge_lora_state_dict_for_save(state_dict)
             state_dict_bf16 = {k: v.to(torch.bfloat16) for k, v in state_dict.items()}
             # optim_state = get_optimizer_state_dict(
             #         self.transformer, self.optimizer,
@@ -546,10 +789,21 @@ def run(args):
 
     if args.save_root is not None:
         config.save_root = args.save_root
+    config.finetune_only_action = args.finetune_only_action
+    config.lora = args.lora
+    config.lora_rank = args.lora_rank
+    config.lora_alpha = args.lora_alpha
+    config.lora_dropout = args.lora_dropout
 
     if rank == 0:
         logger.info(f"Using config: {args.config_name}")
         logger.info(f"World size: {world_size}, Local rank: {local_rank}")
+        logger.info(f"finetune_only_action: {config.finetune_only_action}")
+        logger.info(f"lora: {config.lora}")
+        if config.lora:
+            logger.info(
+                f"LoRA config: rank={config.lora_rank}, alpha={config.lora_alpha}, dropout={config.lora_dropout}"
+            )
 
     trainer = Trainer(config)
     trainer.train()
@@ -569,6 +823,40 @@ def main():
         type=str,
         default=None,
         help="Root directory for saving checkpoints",
+    )
+    parser.add_argument(
+        "--finetune_only_action",
+        type=_str2bool,
+        nargs="?",
+        const=True,
+        default=False,
+        help="Freeze video/shared transformer weights and optimize only action-specific modules.",
+    )
+    parser.add_argument(
+        "--lora",
+        type=_str2bool,
+        nargs="?",
+        const=True,
+        default=False,
+        help="With --finetune_only_action, add trainable LoRA adapters to transformer blocks.",
+    )
+    parser.add_argument(
+        "--lora-rank",
+        type=int,
+        default=8,
+        help="LoRA rank for transformer block Linear layers.",
+    )
+    parser.add_argument(
+        "--lora-alpha",
+        type=float,
+        default=16.0,
+        help="LoRA alpha scaling for transformer block Linear layers.",
+    )
+    parser.add_argument(
+        "--lora-dropout",
+        type=float,
+        default=0.0,
+        help="LoRA dropout probability.",
     )
 
     args = parser.parse_args()

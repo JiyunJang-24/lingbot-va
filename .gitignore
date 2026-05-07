@@ -2,3 +2,5 @@
 checkpoints/
 outputs/
 datasets/
+train_out/
+wandb/

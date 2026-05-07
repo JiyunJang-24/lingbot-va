@@ -79,12 +79,13 @@ def env_one_step(env_in, action):
     return _extract_obs(obs), done
 
 
-def run_one(model, libero_benchmark, task_idx, out_dir, episode_idx, max_timesteps):
+def run_one(model, libero_benchmark, task_idx, out_dir, episode_idx, max_timesteps, task_description=None):
     benchmark_dict = benchmark.get_benchmark_dict()
     benchmark_instance = benchmark_dict[libero_benchmark]()
     num_tasks = benchmark_instance.get_num_tasks()
     assert task_idx < num_tasks, f"Error: error id must smaller than {num_tasks}"
-    prompt = benchmark_instance.get_task(task_idx).language
+    original_prompt = benchmark_instance.get_task(task_idx).language
+    prompt = task_description if task_description else original_prompt
     env_args = {
                 "bddl_file_name": benchmark_instance.get_task_bddl_file_path(task_idx),
                 "camera_heights": 128,
@@ -146,7 +147,7 @@ def run_one(model, libero_benchmark, task_idx, out_dir, episode_idx, max_timeste
     return done
 
 
-def run(libero_benchmark, port, out_dir, test_num, task_range=None, max_timesteps=800):
+def run(libero_benchmark, port, out_dir, test_num, task_range=None, max_timesteps=800, task_description=None):
     '''
         task_range: [start, end) for splitting tasks
     '''
@@ -176,7 +177,15 @@ def run(libero_benchmark, port, out_dir, test_num, task_range=None, max_timestep
             succ_num = 0.
 
         for episode_idx in tqdm(episode_list, total=len(episode_list)):
-            res_i = run_one(model, libero_benchmark, task_idx, out_dir, episode_idx, max_timesteps)
+            res_i = run_one(
+                model,
+                libero_benchmark,
+                task_idx,
+                out_dir,
+                episode_idx,
+                max_timesteps,
+                task_description=task_description,
+            )
             succ_num += res_i
             succ_rate = succ_num / (episode_idx + 1)
             print(f"Success rate: {succ_rate}, success num: {succ_num}, total num: {episode_idx + 1}")
@@ -186,6 +195,7 @@ def run(libero_benchmark, port, out_dir, test_num, task_range=None, max_timestep
                 "succ_num": succ_num,
                 "total_num": episode_idx + 1.,
                 "succ_rate": succ_rate,
+                "task_description": task_description,
                 }, out_file
             )
 
@@ -229,6 +239,12 @@ def main():
         type=int,
         default=800,
         help="Maximum environment timesteps per episode",
+    )
+    parser.add_argument(
+        "--task-description",
+        type=str,
+        default=None,
+        help="Override the LIBERO task language prompt sent to the model",
     )
     args = parser.parse_args()
     run(**vars(args))

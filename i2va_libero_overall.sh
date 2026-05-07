@@ -13,6 +13,24 @@ PYOPENGL_BACKEND="${PYOPENGL_PLATFORM:-$MUJOCO_GL_BACKEND}"
 
 cd "$REPO_ROOT"
 
+TASK_DESCRIPTION="${TASK_DESCRIPTION:-}"
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --task-description)
+      TASK_DESCRIPTION="$2"
+      shift 2
+      ;;
+    --task-description=*)
+      TASK_DESCRIPTION="${1#*=}"
+      shift
+      ;;
+    *)
+      echo "[ERROR] Unknown argument: $1" >&2
+      exit 1
+      ;;
+  esac
+done
+
 if [[ -x "$REPO_ROOT/.venv/bin/python" ]]; then
   PYTHON_BIN="$REPO_ROOT/.venv/bin/python"
 else
@@ -23,10 +41,17 @@ pkill -f 'evaluation/libero/client.py' || true
 pkill -f 'wan_va.wan_va_server --config-name libero' || true
 
 
-save_folder_name="libero_10_base_time_200"
+save_folder_name="${SAVE_FOLDER_NAME:-libero_10_base_time_200}"
 libero_benchmark="libero_10"
 model_path="${MODEL_PATH:-$REPO_ROOT/checkpoints/lingbot-va-base}"
 mkdir -p outputs/$save_folder_name
+client_extra_args=()
+i2va_extra_args=()
+if [[ -n "$TASK_DESCRIPTION" ]]; then
+  echo "[INFO] Overriding LIBERO task description: $TASK_DESCRIPTION"
+  client_extra_args=(--task-description "$TASK_DESCRIPTION")
+  i2va_extra_args=(--task-description "$TASK_DESCRIPTION")
+fi
 
 # Start the server
 (
@@ -50,12 +75,13 @@ mkdir -p outputs/$save_folder_name
     --test-num 1 \
     --task-range 0 1 \
     --max-timesteps 200 \
-    --out-dir outputs/$save_folder_name
+    --out-dir outputs/$save_folder_name \
+    "${client_extra_args[@]}"
 )
 #time sleep 5
 
-actual=$(find outputs/$save_folder_name -name '*.mp4' | sort | tail -1)
-pred_dir=$(find outputs/$save_folder_name/data/real -mindepth 1 -maxdepth 1 -type d | sort | tail -1)
+actual=$(find "outputs/$save_folder_name/$libero_benchmark" -name '*.mp4' -printf '%T@ %p\n' | sort -n | tail -1 | cut -d' ' -f2-)
+pred_dir=$(find "outputs/$save_folder_name/data/real" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' | sort -n | tail -1 | cut -d' ' -f2-)
 
 echo $actual
 echo $pred_dir
@@ -83,4 +109,5 @@ $PYTHON_BIN evaluation/libero/run_i2va_from_first_scene.py \
   --test-num 1 \
   --task-idx 0 \
   --model-path $model_path \
-  --output-root outputs/$save_folder_name
+  --output-root outputs/$save_folder_name \
+  "${i2va_extra_args[@]}"

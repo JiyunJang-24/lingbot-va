@@ -3,12 +3,14 @@ set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
-if [[ "${CONDA_DEFAULT_ENV:-}" != "lingbot-va" ]]; then
+if [[ -x "$PWD/.venv/bin/python" ]]; then
+  export PATH="$PWD/.venv/bin:$PATH"
+elif [[ "${CONDA_DEFAULT_ENV:-}" != "lingbot-va" ]]; then
   if command -v conda >/dev/null 2>&1; then
     exec conda run -n lingbot-va bash "$PWD/i2va_libero.sh" "$@"
   fi
 
-  echo "Please activate the lingbot-va conda environment first." >&2
+  echo "Please activate the lingbot-va conda environment first or create .venv." >&2
   exit 1
 fi
 
