@@ -610,7 +610,6 @@ class VA_Server:
         reset = obs.get('reset', False)
         prompt = obs.get('prompt', None)
         compute_kv_cache = obs.get('compute_kv_cache', False)
-
         if reset:
             logger.info(f"******************* Reset server ******************")
             self._reset(prompt=prompt)
@@ -624,7 +623,7 @@ class VA_Server:
             logger.info(f"################# Infer One Chunk #################")
             action, _ = self._infer(obs, frame_st_id=self.frame_st_id)
             return dict(action=action)
-    
+
     def decode_one_video(self, latents, output_type):
         latents = latents.to(self.vae.dtype)
         latents_mean = (
