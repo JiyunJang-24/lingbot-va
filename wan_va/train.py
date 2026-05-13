@@ -503,6 +503,8 @@ class Trainer:
         latent_dict['text_emb'] = batch_dict['text_emb']
         action_dict['text_emb'] = batch_dict['text_emb']
         action_dict['actions_mask'] = batch_dict['actions_mask']
+        if 'use_latent_loss' in batch_dict:
+            latent_dict['use_latent_loss'] = batch_dict['use_latent_loss']
 
         input_dict = {
             'latent_dict': latent_dict,
@@ -535,6 +537,11 @@ class Trainer:
         # Frame-wise video loss calculation
         latent_loss = F.mse_loss(latent_pred.float(), input_dict['latent_dict']['targets'].float().detach(), reduction='none')
         latent_loss = latent_loss * latent_loss_weight[:, None, :, None, None]
+        # Per-sample mask: zero out latent loss for samples flagged as rewind (use_latent_loss=False).
+        # See wan_va/dataset/lerobot_latent_dataset.py — flag derived from dataset path containing "rewind".
+        if 'use_latent_loss' in input_dict['latent_dict']:
+            sample_mask = input_dict['latent_dict']['use_latent_loss'].to(latent_loss.dtype).reshape(-1, 1, 1, 1, 1)
+            latent_loss = latent_loss * sample_mask
         # Permute to (B, F, H, W, C) and flatten to (B*F, H*W*C)
         latent_loss = latent_loss.permute(0, 2, 3, 4, 1)  # (B, C, F, H, W) -> (B, F, H, W, C)
         latent_loss = latent_loss.flatten(0, 1).flatten(1)  # (B, F, H, W, C) -> (B*F, H*W*C)

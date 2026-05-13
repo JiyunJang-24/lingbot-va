@@ -1,5 +1,6 @@
 # Copyright 2024-2025 The Robbyant Team Authors. All rights reserved.
 import argparse
+import math
 import os
 import sys
 import time
@@ -687,6 +688,12 @@ def run(args):
         config.prompt = args.prompt
     if args.input_img_path is not None:
         config.input_img_path = args.input_img_path
+    if args.num_chunks_to_infer is not None:
+        config.num_chunks_to_infer = args.num_chunks_to_infer
+    elif args.target_frame_index is not None:
+        temporal_decode_stride = 4
+        latent_frames_needed = max(1, math.ceil((args.target_frame_index + temporal_decode_stride) / temporal_decode_stride))
+        config.num_chunks_to_infer = max(1, math.ceil(latent_frames_needed / config.frame_chunk_size))
     model_path = config.wan22_pretrained_model_name_or_path
     if not os.path.isdir(model_path):
         raise FileNotFoundError(
@@ -752,6 +759,18 @@ def main():
         type=str,
         default=None,
         help="Override input image directory for i2va mode",
+    )
+    parser.add_argument(
+        "--num_chunks_to_infer",
+        type=int,
+        default=None,
+        help="Override number of i2va chunks to generate",
+    )
+    parser.add_argument(
+        "--target_frame_index",
+        type=int,
+        default=None,
+        help="Generate only enough i2va chunks to include this decoded video frame index",
     )
     args = parser.parse_args()
     run(args)

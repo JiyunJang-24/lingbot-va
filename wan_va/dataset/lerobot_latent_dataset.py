@@ -18,7 +18,9 @@ from lerobot.constants import HF_LEROBOT_HOME
 def recursive_find_file(directory, filename='info.json'):
     result = []
     try:
-        for root, dirs, files in os.walk(directory):
+        # followlinks=True so symlink-based run directories (datasets/_runs/*) traverse
+        # into the actual sub-version directories.
+        for root, dirs, files in os.walk(directory, followlinks=True):
             if filename in files:
                 full_path = os.path.join(root, filename)
                 result.append(full_path)
@@ -148,6 +150,7 @@ class LatentLeRobotDataset(LeRobotDataset):
         self.config = config
         self.cfg_prob = config.cfg_prob
         self.used_video_keys = config.obs_cam_keys
+        self.is_rewind = "rewind" in str(repo_id).lower()
         self.q01 = np.array(config.norm_stat['q01'], dtype='float')[None]
         self.q99 = np.array(config.norm_stat['q99'], dtype='float')[None]
         self._hf_torch_view = self.hf_dataset.with_format(
@@ -308,6 +311,7 @@ class LatentLeRobotDataset(LeRobotDataset):
         out_dict['actions'], out_dict['actions_mask'] = self._action_post_process(local_start_frame, local_end_frame, latent_frame_ids, ori_data_dict['action'])
 
         out_dict['latents'] = out_dict['latents'].permute(3, 0, 1, 2)
+        out_dict['use_latent_loss'] = torch.tensor(not self.is_rewind, dtype=torch.bool)
         return out_dict
 
     def __len__(self):

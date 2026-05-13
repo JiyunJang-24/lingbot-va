@@ -46,7 +46,11 @@ def patch_action_config(dataset_dir: Path) -> None:
 
 def compute_action_quantiles(dataset_dir: Path, q_low: float, q_high: float) -> dict[str, list[float]]:
     actions = []
-    for parquet_path in sorted((dataset_dir / "data").glob("chunk-*/episode_*.parquet")):
+    # Try per-episode parquet first, then fall back to sharded file-*.parquet.
+    parquet_paths = sorted((dataset_dir / "data").glob("chunk-*/episode_*.parquet"))
+    if not parquet_paths:
+        parquet_paths = sorted((dataset_dir / "data").glob("chunk-*/file-*.parquet"))
+    for parquet_path in parquet_paths:
         df = pd.read_parquet(parquet_path, columns=["action"])
         actions.append(np.stack(df["action"].to_numpy()).astype(np.float32))
     if not actions:
